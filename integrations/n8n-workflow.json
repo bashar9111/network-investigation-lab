@@ -1,0 +1,131 @@
+{
+  "name": "Network Lab \u2014 Reviewed Aggregate to OpenAI and Email",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Aggregate Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "network-lab-reviewed-brief",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "minimize",
+      "name": "Validate and Minimize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const b=$json.body;\nif (!b || !/^CASE-[A-F0-9]{8}$/.test(b.case_id)) throw new Error('Invalid case');\nconst metrics={};\nfor (const k of ['events','bytes','duration','hosts','dns_queries','blocked','high','alerts']) {\n const v=Number(b.metrics?.[k]); if (!Number.isFinite(v)||v<0) throw new Error('Invalid metrics'); metrics[k]=v;\n}\nconst allowed=['TCP-SCAN','DNS-BURST','DNS-NXDOMAIN','DNS-LONG'];\nconst findings=(b.findings||[]).slice(0,100).map(f=>{\n if (!allowed.includes(f.rule)||!['High','Medium','Low'].includes(f.severity)) throw new Error('Invalid rule');\n return {rule:f.rule,severity:f.severity};\n});\nreturn [{json:{case_id:b.case_id,synthetic:b.synthetic===true,metrics,findings}}];"
+      }
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model: 'CONFIGURE_MODEL', store: false, max_output_tokens: 700, instructions: 'You assist a defensive analyst. Summarize only the supplied counts and heuristic rules. Do not invent incidents or evidence. State uncertainty and review steps. Do not recommend automatic blocking.', input: JSON.stringify($json)}) }}",
+        "options": {
+          "timeout": 45000
+        }
+      }
+    },
+    {
+      "id": "email",
+      "name": "Send Reviewed Brief",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "fromEmail": "sender@example.invalid",
+        "toEmail": "recipient@example.invalid",
+        "subject": "Network lab \u2014 analyst review",
+        "emailFormat": "text",
+        "text": "={{ ($json.output || []).flatMap(item => item.content || []).filter(part => part.type === 'output_text').map(part => part.text).join('\\n') || 'No AI text returned. Inspect this workflow execution before taking action.' }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "note",
+      "name": "Setup before activation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -300
+      ],
+      "parameters": {
+        "content": "## Inactive setup template \u2014 review before use\n1. Configure Webhook Header Auth: X-Lab-Webhook-Token with your own secret.\n2. Configure OpenAI HTTP Header Auth: Authorization = Bearer YOUR_KEY (in credentials only).\n3. Replace CONFIGURE_MODEL with an available model ID.\n4. Configure SMTP credentials, sender and your own test recipient.\n5. Test with synthetic data, inspect output, then activate only when ready.\nWebhook acceptance does not prove email delivery. No credentials are included.",
+        "height": 240,
+        "width": 850
+      }
+    }
+  ],
+  "connections": {
+    "Aggregate Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate and Minimize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Minimize": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Brief": {
+      "main": [
+        [
+          {
+            "node": "Send Reviewed Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "tags": []
+}
